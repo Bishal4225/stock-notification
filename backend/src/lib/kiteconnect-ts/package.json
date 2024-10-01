@@ -1,0 +1,56 @@
+{
+  "name": "kiteconnect-ts",
+  "author": "Anurag Roy",
+  "description": "Unofficial library for the Kite Connect trading APIs, written in TypeScript.",
+  "license": "MIT",
+  "version": "1.1.0",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anurag-roy/kiteconnect-ts.git"
+  },
+  "homepage": "https://kiteconnect.anuragroy.dev",
+  "bugs": {
+    "url": "https://github.com/anurag-roy/kiteconnect-ts/issues"
+  },
+  "keywords": [
+    "Zerodha",
+    "KiteConnect",
+    "KiteTicker",
+    "TypeScript"
+  ],
+  "devDependencies": {
+    "@changesets/cli": "^2.27.1",
+    "@types/papaparse": "^5.3.14",
+    "@types/ws": "^8.5.10",
+    "nock": "14.0.0-beta.3",
+    "tsup": "^8.0.2",
+    "tsx": "^4.7.1",
+    "typedoc": "^0.25.8",
+    "typedoc-plugin-markdown": "^3.17.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "papaparse": "^5.4.1",
+    "ws": "^8.16.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "lint": "tsc",
+    "build": "tsup lib/index.ts --format cjs,esm --dts",
+    "release": "pnpm run build && pnpm changeset publish",
+    "generateDocs": "tsx typedoc/generateDocs.ts",
+    "test:kiteconnect": "tsx tests/kiteconnect.test.ts",
+    "test:kiteticker": "tsx tests/kiteticker.test.ts",
+    "test": "pnpm run test:kiteconnect && pnpm run test:kiteticker"
+  }
+}
