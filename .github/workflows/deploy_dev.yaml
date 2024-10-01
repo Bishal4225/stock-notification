@@ -46,12 +46,16 @@ jobs:
     # ===============================
     # BACKEND DEPLOYMENT (Node.js)
     # ===============================
-    # Step 5: Build, tag, and push Docker image for backend
-# Step 5: Build, tag, and push Docker image for backend
+    # Step 5: Login to Amazon ECR
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
 
+    # Step 6: Build, tag, and push Docker image for backend
     - name: Build, tag, and push backend image to Amazon ECR
       working-directory: backend  # Ensure this path is correct
       env:
@@ -59,19 +63,18 @@ jobs:
         ECR_REPOSITORY: ${{ secrets.REPO_NAME }}  # Ensure this secret is set with the correct repo name
         IMAGE_TAG: ${{ github.sha }}
       run: |
-       # Build the Docker image for the backend
-       docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        # Build the Docker image for the backend
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
 
-       # Push the Docker image to ECR
-       docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
+        # Push the Docker image to ECR
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
     # Optional: ECR Image Scan for security vulnerabilities
     - name: Start image scan
       run: |
         aws ecr start-image-scan \
-          --repository-name $SITE_NAME \
-          --image-id imageTag=$GITHUB_SHA
+          --repository-name $ECR_REPOSITORY \
+          --image-id imageTag=$IMAGE_TAG
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
