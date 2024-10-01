@@ -1,4 +1,4 @@
-name: Deploy LAMP site to DEV
+name: Deploy site to DEV ENVIROMENT
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
   deploy:
     needs: [ login ]
     name: Deploy
-    runs-on: AbbVie-lamp-dev
+    runs-on: ubuntu-latest
     container:
       image: docker:latest
     environment: dev
