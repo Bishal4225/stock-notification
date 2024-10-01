@@ -9,7 +9,6 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
   SITE_NAME: ${{ secrets.SITE_NAME }}
-  SITE_URL: ${{ secrets.DEV_SITE_URL }}
 
 jobs:
   build_and_deploy:
