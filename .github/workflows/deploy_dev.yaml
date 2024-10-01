@@ -60,7 +60,7 @@ jobs:
       working-directory: backend  # Ensure this path is correct
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: ${{ secrets.REPO_NAME }}  # Ensure this secret is set with the correct repo name
+        ECR_REPOSITORY: stock-notification # Ensure this secret is set with the correct repo name
         IMAGE_TAG: ${{ github.sha }}
       run: |
         # Build the Docker image for the backend
@@ -75,6 +75,3 @@ jobs:
         aws ecr start-image-scan \
           --repository-name $ECR_REPOSITORY \
           --image-id imageTag=$IMAGE_TAG
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
