@@ -1,0 +1,218 @@
+name: Build, Push to ECR, and Deploy to EC2
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REGISTRY: 294909769341.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: dosomecoding/stocks-notification
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push backend image to Amazon ECR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Create a temporary .env file for the backend
+          cat << EOF > ./backend/.env
+          MAILGUN_API_KEY=${{ secrets.MAILGUN_API_KEY }}
+          MAILGUN_DOMAIN=${{ secrets.MAILGUN_DOMAIN }}
+          MAILGUN_MAIL_LIST_DOMAIN=${{ secrets.MAILGUN_MAIL_LIST_DOMAIN }}
+          REFRESH_TOKEN_SECRET=${{ secrets.REFRESH_TOKEN_SECRET }}
+          ACCESS_TOKEN_SECRET=${{ secrets.ACCESS_TOKEN_SECRET }}
+          RESET_TOKEN_SECRET=${{ secrets.RESET_TOKEN_SECRET }}
+          FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+          NSE_BASE_URL=${{ secrets.NSE_BASE_URL }}
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          WEB_HOOK=${{ secrets.WEB_HOOK }}
+          EOF
+
+          # Build the Docker image
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:backend-$IMAGE_TAG -f backend/Dockerfile --target production ./backend
+
+          # Push the image to ECR
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:backend-$IMAGE_TAG
+
+          # Clean up the temporary .env file
+          rm ./backend/.env
+
+      - name: Build, tag, and push frontend image to Amazon ECR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Create a temporary .env file for the frontend
+          echo "NEXT_PUBLIC_BACKEND_SERVER=${{ secrets.NEXT_PUBLIC_BACKEND_SERVER }}" > ./frontend/.env
+
+          # Build the Docker image
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:frontend-$IMAGE_TAG -f frontend/Dockerfile --target production ./frontend
+
+          # Push the image to ECR
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:frontend-$IMAGE_TAG
+
+          # Clean up the temporary .env file
+          rm ./frontend/.env
+
+  deploy-to-ec2:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to EC2
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "$EC2_SSH_KEY" > ssh_key.pem
+          chmod 600 ssh_key.pem
+
+          ssh -i ssh_key.pem -o StrictHostKeyChecking=no $EC2_USERNAME@$EC2_HOST << EOF
+            set -e  # Exit immediately if a command exits with a non-zero status
+
+            echo "Checking for AWS CLI..."
+            if ! command -v aws &> /dev/null; then
+              echo "Installing AWS CLI..."
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip awscliv2.zip
+              sudo ./aws/install
+              rm -rf aws awscliv2.zip
+            else
+              echo "AWS CLI already installed."
+            fi
+
+            echo "Checking for Docker..."
+            if ! command -v docker &> /dev/null; then
+              echo "Installing Docker..."
+              sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
+              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+              sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+              sudo apt update
+              sudo apt install -y docker-ce docker-ce-cli containerd.io
+              sudo systemctl start docker
+              sudo systemctl enable docker
+              sudo usermod -aG docker $USER
+            else
+              echo "Docker already installed."
+            fi
+
+            echo "Configuring AWS CLI..."
+            aws configure set region ${{ env.AWS_REGION }}
+
+            echo "Logging into ECR..."
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+            echo "Pulling latest images..."
+            sudo docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:backend-$IMAGE_TAG
+            sudo docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-$IMAGE_TAG
+
+            echo "Stopping and removing existing containers..."
+            sudo docker stop backend frontend || true
+            sudo docker rm backend frontend || true
+
+            echo "Running new containers..."
+            sudo docker run -d --name backend \
+              --env-file /path/to/backend/.env \
+              -p 5000:5000 \
+              ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:backend-$IMAGE_TAG
+
+            sudo docker run -d --name frontend \
+              --env-file /path/to/frontend/.env \
+              -p 3000:3000 \
+              ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-$IMAGE_TAG
+
+            echo "Cleaning up old images..."
+            sudo docker system prune -af
+
+            echo "Deployment completed successfully!"
+          EOF
+
+          rm ssh_key.pem
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to EC2
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Write the SSH key to a file
+          echo "$EC2_SSH_KEY" > ssh_key.pem
+          chmod 600 ssh_key.pem
+
+          # SSH into the EC2 instance and update the containers
+          ssh -i ssh_key.pem -o StrictHostKeyChecking=no $EC2_USERNAME@$EC2_HOST << EOF
+            # Update system and install required software
+            sudo apt update && sudo apt upgrade -y
+            sudo apt install awscli docker.io -y
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            sudo usermod -aG docker $EC2_USERNAME
+
+            # Configure AWS CLI
+            aws configure set region ${{ env.AWS_REGION }}
+
+            # Login to ECR
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+            # Pull the latest images
+            sudo docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:backend-$IMAGE_TAG
+            sudo docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-$IMAGE_TAG
+
+            # Stop and remove existing containers (if any)
+            sudo docker stop backend frontend || true
+            sudo docker rm backend frontend || true
+
+            # Run new containers
+            sudo docker run -d --name backend \
+              --env-file /path/to/backend/.env \
+              -p 5000:5000 \
+              ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:backend-$IMAGE_TAG
+
+            sudo docker run -d --name frontend \
+              --env-file /path/to/frontend/.env \
+              -p 3000:3000 \
+              ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-$IMAGE_TAG
+
+            # Clean up old images
+            sudo docker system prune -af
+          EOF
+
+          # Remove the SSH key file
+          rm ssh_key.pem
