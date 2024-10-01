@@ -1,0 +1,93 @@
+name: Deploy LAMP site to DEV
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '.db-scripts/**'
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with: 
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker pull latest
+        run: | 
+          docker pull docker:latest
+  deploy:
+    needs: [ login ]
+    name: Deploy
+    runs-on: AbbVie-lamp-dev
+    container:
+      image: docker:latest
+    environment: dev
+
+    steps:
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with: 
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Checkout site code
+      uses: actions/checkout@v2
+      with:
+        path: site
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-region: ${{ secrets.LAMP_AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        SITE_TYPE: ${{ secrets.SITE_TYPE }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.SITE_NAME }}
+        IMAGE_TAG: ${{ github.sha }}
+        RELEASE: ${{ github.ref_name }}
+      run: |
+        source ./core/site/${SITE_TYPE}/build-image.sh
+        echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$RELEASE"
+
+    - name: Update task definition
+      id: update-task-definition
+      env:
+        SITE_TYPE: ${{ secrets.SITE_TYPE }}
+        RELEASE_IMAGE: ${{ steps.build-image.outputs.image }}
+        SITE_NAME: ${{ secrets.SITE_NAME }}
+        SITE_URL: ${{ secrets.DEV_SITE_URL }}
+         
+      run: |
+        source ./core/site/${SITE_TYPE}/update-task-definition.sh
+
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: ./site/.docker/ecs/task-definition.json
+        container-name: ${{ secrets.SITE_NAME }}-container
+        image: ${{ steps.build-image.outputs.image }}
+
+    - name: Deploy Amazon ECS task definition
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ secrets.SITE_NAME }}-service
+        cluster: Lamp-dev
+        wait-for-service-stability: true
