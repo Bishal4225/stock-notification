@@ -38,7 +38,7 @@ jobs:
     # Step 4: Deploy React build to S3
     - name: Deploy React to S3
       run: |
-        aws s3 sync ./frontend/build s3://your-frontend-s3-bucket/ --delete
+        aws s3 sync frontend/build s3://stock-notification/ --delete
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -62,19 +62,12 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-    # Step 6: Update ECS Task Definition
-    - name: Update ECS Task Definition
-      id: update-task
+    # Optional: ECR Image Scan for security vulnerabilities
+    - name: Start image scan
       run: |
-        aws ecs update-service \
-          --cluster your-ecs-cluster-name \
-          --service ${{ secrets.SITE_NAME }}-service \
-          --force-new-deployment
-
-    # Optionally: Wait for the ECS service to stabilize
-    - name: Wait for ECS Service to stabilize
-      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-      with:
-        service: ${{ secrets.SITE_NAME }}-service
-        cluster: your-ecs-cluster-name
-        wait-for-service-stability: true
+        aws ecr start-image-scan \
+          --repository-name $SITE_NAME \
+          --image-id imageTag=$GITHUB_SHA
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
