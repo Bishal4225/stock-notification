@@ -1,93 +1,81 @@
-name: Deploy site to DEV ENVIROMENT
+name: Deploy Frontend and Backend
 
 on:
-  workflow_dispatch:
   push:
     branches:
-      - dev
-    paths-ignore:
-      - '.db-scripts/**'
+      - main   # Deploy on push to the main branch
 
 env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+  SITE_NAME: ${{ secrets.SITE_NAME }}
+  SITE_URL: ${{ secrets.DEV_SITE_URL }}
 
 jobs:
-  login:
-    runs-on: self-hosted
-    steps:
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with: 
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Docker pull latest
-        run: | 
-          docker pull docker:latest
-  deploy:
-    needs: [ login ]
-    name: Deploy
+  build_and_deploy:
     runs-on: ubuntu-latest
-    container:
-      image: docker:latest
-    environment: dev
 
     steps:
-    - name: Login to Docker Hub
-      uses: docker/login-action@v2
-      with: 
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Checkout site code
+    # Step 1: Checkout the code
+    - name: Checkout code
       uses: actions/checkout@v2
+
+    # Step 2: Set up Node.js for frontend and backend
+    - name: Set up Node.js for both frontend and backend
+      uses: actions/setup-node@v2
       with:
-        path: site
+        node-version: '16'
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        aws-region: ${{ secrets.LAMP_AWS_REGION }}
-
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
-
-    - name: Build, tag, and push image to Amazon ECR
-      id: build-image
-      env:
-        SITE_TYPE: ${{ secrets.SITE_TYPE }}
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: ${{ secrets.SITE_NAME }}
-        IMAGE_TAG: ${{ github.sha }}
-        RELEASE: ${{ github.ref_name }}
+    # ===============================
+    # FRONTEND DEPLOYMENT (React)
+    # ===============================
+    # Step 3: Install and build React frontend
+    - name: Install and build React frontend
+      working-directory: frontend   # Ensure this path is correct
       run: |
-        source ./core/site/${SITE_TYPE}/build-image.sh
-        echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$RELEASE"
+        npm install
+        npm run build
 
-    - name: Update task definition
-      id: update-task-definition
-      env:
-        SITE_TYPE: ${{ secrets.SITE_TYPE }}
-        RELEASE_IMAGE: ${{ steps.build-image.outputs.image }}
-        SITE_NAME: ${{ secrets.SITE_NAME }}
-        SITE_URL: ${{ secrets.DEV_SITE_URL }}
-         
+    # Step 4: Deploy React build to S3
+    - name: Deploy React to S3
       run: |
-        source ./core/site/${SITE_TYPE}/update-task-definition.sh
+        aws s3 sync ./frontend/build s3://your-frontend-s3-bucket/ --delete
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-    - name: Fill in the new image ID in the Amazon ECS task definition
-      id: task-def
-      uses: aws-actions/amazon-ecs-render-task-definition@v1
-      with:
-        task-definition: ./site/.docker/ecs/task-definition.json
-        container-name: ${{ secrets.SITE_NAME }}-container
-        image: ${{ steps.build-image.outputs.image }}
+    # ===============================
+    # BACKEND DEPLOYMENT (Node.js)
+    # ===============================
+    # Step 5: Build, tag, and push Docker image for backend
+    - name: Build, tag, and push backend image to Amazon ECR
+      working-directory: backend  # Ensure this path is correct
+      run: |
+        # Log in to Amazon ECR
+        aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+        
+        # Build the Docker image for the backend
+        docker build -t $ECR_REGISTRY/$SITE_NAME:$GITHUB_SHA .
 
-    - name: Deploy Amazon ECS task definition
+        # Tag and push the image
+        docker push $ECR_REGISTRY/$SITE_NAME:$GITHUB_SHA
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    # Step 6: Update ECS Task Definition
+    - name: Update ECS Task Definition
+      id: update-task
+      run: |
+        aws ecs update-service \
+          --cluster your-ecs-cluster-name \
+          --service ${{ secrets.SITE_NAME }}-service \
+          --force-new-deployment
+
+    # Optionally: Wait for the ECS service to stabilize
+    - name: Wait for ECS Service to stabilize
       uses: aws-actions/amazon-ecs-deploy-task-definition@v1
       with:
-        task-definition: ${{ steps.task-def.outputs.task-definition }}
         service: ${{ secrets.SITE_NAME }}-service
-        cluster: Lamp-dev
+        cluster: your-ecs-cluster-name
         wait-for-service-stability: true
