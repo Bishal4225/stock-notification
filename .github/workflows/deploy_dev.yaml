@@ -3,7 +3,7 @@ name: Deploy Frontend and Backend
 on:
   push:
     branches:
-      - main   # Deploy on push to the main branch
+      - main  # Deploy on push to the main branch
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -30,15 +30,15 @@ jobs:
     # ===============================
     # Step 3: Install and build React frontend
     - name: Install and build React frontend
-      working-directory: frontend   # Ensure this path is correct
+      working-directory: frontend  # Ensure this path is correct
       run: |
         npm install --legacy-peer-deps  # Bypass the peer dependency issue
         npm run build
 
     # Step 4: Deploy React build to S3
-    - name: Deploy NEXT to S3
+    - name: Deploy React to S3
       run: |
-        aws s3 sync frontend s3://stock-notification/ --delete
+        aws s3 sync frontend/build s3://stock-notification/ --delete
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -50,17 +50,17 @@ jobs:
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
 
     # Step 6: Build, tag, and push Docker image for backend
     - name: Build, tag, and push backend image to Amazon ECR
       working-directory: backend  # Ensure this path is correct
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: stock-notification # Ensure this secret is set with the correct repo name
+        ECR_REPOSITORY: stock-notification  # Ensure this matches the repository name in ECR
         IMAGE_TAG: ${{ github.sha }}
       run: |
         # Build the Docker image for the backend
@@ -71,6 +71,10 @@ jobs:
 
     # Optional: ECR Image Scan for security vulnerabilities
     - name: Start image scan
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
       run: |
         aws ecr start-image-scan \
           --repository-name $ECR_REPOSITORY \
