@@ -1,0 +1,73 @@
+name: Deploy Frontend to EC2 using Docker
+
+on:
+  push:
+    branches:
+      - main  # Deploy on push to the main branch
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+  EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+        NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+        NEXT_PUBLIC_GOOGLE_ANALYTICS_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_ANALYTICS_ID }}
+      run: |
+        # Build a docker container and push it to ECR 
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          --build-arg NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+          --build-arg NEXT_PUBLIC_GOOGLE_ANALYTICS_ID=$NEXT_PUBLIC_GOOGLE_ANALYTICS_ID .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+    - name: Deploy to EC2
+      env:
+        PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+        HOST: ${{ secrets.EC2_HOST }}
+        USER: ${{ secrets.EC2_USERNAME }}
+      run: |
+        echo "$PRIVATE_KEY" > private_key && chmod 600 private_key
+        ssh -o StrictHostKeyChecking=no -i private_key ${USER}@${HOST} '
+          # Login to ECR
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+          
+          # Pull the latest image
+          docker pull ${{ steps.build-image.outputs.image }}
+          
+          # Stop and remove the existing container (if it exists)
+          docker stop frontend-container || true
+          docker rm frontend-container || true
+          
+          # Run the new container
+          docker run -d --name frontend-container -p 3000:3000 ${{ steps.build-image.outputs.image }}
+          
+          # Cleanup old images (optional)
+          docker image prune -af
+        '
+        rm -f private_key
